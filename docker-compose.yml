@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # 1. Full-Stack Web Applet (React/Vite Dashboard + Express API gateway)
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: legend-ai-web:latest
+    container_name: legend-web
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - BACKEND_API_URL=http://fastapi-backend:8000
+    depends_on:
+      - fastapi-backend
+    restart: unless-stopped
+
+  # 2. Python FastAPI Service (Coordinates video files, ML analysis trigger)
+  fastapi-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn src.backend-fastapi.main:app --host 0.0.0.0 --port 8000
+    container_name: legend-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - shared-video-cache:/data
+    environment:
+      - DATABASE_URL=postgresql://postgres:legend_secure_pass@postgres:5432/legend_db
+      - REDIS_URL=redis://redis:6379/0
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # 3. Celery GPU Background Worker (Heavy FFmpeg, Whisper Large, YOLOv8 model inference)
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A src.backend-fastapi.worker.celery_app worker --loglevel=info -c 1
+    container_name: legend-worker
+    volumes:
+      - shared-video-cache:/data
+    environment:
+      - DATABASE_URL=postgresql://postgres:legend_secure_pass@postgres:5432/legend_db
+      - REDIS_URL=redis://redis:6379/0
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    # Pass NVIDIA GPUs down to the container for deep learning acceleration
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
+
+  # 4. Redis Task Broker & Cache
+  redis:
+    image: redis:7.0-alpine
+    container_name: legend-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  # 5. PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: legend-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=legend_secure_pass
+      - POSTGRES_DB=legend_db
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: always
+
+volumes:
+  shared-video-cache:
+    driver: local
+  postgres-data:
+    driver: local

@@ -1,0 +1,6 @@
+{
+  "name": "Legend AI",
+  "description": "Professional AI Movie Recap Production Platform that auto-generates storylines, YouTube-narrated scripts, emotional-dialogue timelines, and realistic AI voice-overs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

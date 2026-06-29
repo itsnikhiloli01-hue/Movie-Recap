@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: legend-ai
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: legend-secrets
+  namespace: legend-ai
+type: Opaque
+stringData:
+  gemini-api-key: "YOUR_GEMINI_API_KEY_HERE"
+  db-password: "legend_secure_pass"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: video-cache-pvc
+  namespace: legend-ai
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legend-web-deployment
+  namespace: legend-ai
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: legend-web
+  template:
+    metadata:
+      labels:
+        app: legend-web
+    spec:
+      containers:
+      - name: web
+        image: legend-ai-web:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: legend-secrets
+              key: gemini-api-key
+        - name: BACKEND_API_URL
+          value: "http://legend-api-service:8000"
+        resources:
+          limits:
+            cpu: "2"
+            memory: 4Gi
+          requests:
+            cpu: "1"
+            memory: 2Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: legend-web-service
+  namespace: legend-ai
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
+  selector:
+    app: legend-web
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legend-worker-deployment
+  namespace: legend-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: legend-worker
+  template:
+    metadata:
+      labels:
+        app: legend-worker
+    spec:
+      containers:
+      - name: worker
+        image: legend-ai-web:latest # Reuses multi-stage container
+        command: ["celery", "-A", "src.backend-fastapi.worker.celery_app", "worker", "--loglevel=info"]
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://postgres:legend_secure_pass@postgres-service:5432/legend_db"
+        - name: REDIS_URL
+          value: "redis://redis-service:6379/0"
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: legend-secrets
+              key: gemini-api-key
+        volumeMounts:
+        - name: video-storage
+          mountPath: /data
+        resources:
+          limits:
+            nvidia.com/gpu: 1 # Requests dedicated hardware GPU for model inference
+            memory: 16Gi
+          requests:
+            cpu: "4"
+            memory: 8Gi
+      volumes:
+      - name: video-storage
+        persistentVolumeClaim:
+          claimName: video-cache-pvc
